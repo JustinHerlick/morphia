@@ -705,7 +705,10 @@ public class DatastoreImpl implements AdvancedDatastore {
 
         if (wr == null) {
             final Query<T> query = (Query<T>) createQuery(unwrapped.getClass()).filter(Mapper.ID_KEY, id);
-            wr = update(query, new BasicDBObject("$set", dbObj), false, false, wc, false).getWriteResult();
+            wr = update(query, new BasicDBObject("$set", dbObj), new UpdateOptions()
+                .upsert(false)
+                .multi(false)
+                .writeConcern(wc)).getWriteResult();
         }
 
         final UpdateResults res = new UpdateResults(wr);
@@ -850,14 +853,11 @@ public class DatastoreImpl implements AdvancedDatastore {
     @Override
     public <T> UpdateResults updateFirst(final Query<T> query, final T entity, final boolean createIfMissing) {
         final LinkedHashMap<Object, DBObject> involvedObjects = new LinkedHashMap<Object, DBObject>();
-        final DBObject dbObj = mapper.toDBObject(entity, involvedObjects);
 
-        final UpdateResults res = update(query, dbObj, createIfMissing, false, getWriteConcern(entity), true);
-
-        // update _id field
-        if (res.getInsertedCount() > 0) {
-            dbObj.put(Mapper.ID_KEY, res.getNewId());
-        }
+        final UpdateResults res = update(query, new BasicDBObject("$set", mapper.toDBObject(entity, involvedObjects)),
+                                         new UpdateOptions()
+                                             .upsert(createIfMissing)
+                                             .writeConcern(getWriteConcern(entity)));
 
         postSaveOperations(singletonList(entity), involvedObjects, getCollection(entity), false);
         return res;
@@ -1325,7 +1325,7 @@ public class DatastoreImpl implements AdvancedDatastore {
                 .filter(versionKeyName, oldVersion);
             final UpdateResults res = update(query, dbObj, new UpdateOptions()
                 .bypassDocumentValidation(options.getBypassDocumentValidation())
-                .writeConcern(options.getWriteConcern()), true);
+                .writeConcern(options.getWriteConcern()));
 
             wr = res.getWriteResult();
 
@@ -1488,16 +1488,7 @@ public class DatastoreImpl implements AdvancedDatastore {
     }
 
     @SuppressWarnings("unchecked")
-    private <T> UpdateResults update(final Query<T> query, final DBObject update, final boolean createIfMissing, final boolean multi,
-                                     final WriteConcern wc, final boolean isReplace) {
-        return  update(query, update, new UpdateOptions()
-                      .upsert(createIfMissing)
-                      .multi(multi)
-                      .writeConcern(wc), isReplace);
-    }
-
-    @SuppressWarnings("unchecked")
-    private <T> UpdateResults update(final Query<T> query, final DBObject update, final UpdateOptions options, final boolean isReplace) {
+    private <T> UpdateResults update(final Query<T> query, final DBObject update, final UpdateOptions options) {
 
         DBCollection dbColl = query.getCollection();
         // TODO remove this after testing.
@@ -1520,17 +1511,12 @@ public class DatastoreImpl implements AdvancedDatastore {
         final MappedClass mc = getMapper().getMappedClass(query.getEntityClass());
         final List<MappedField> fields = mc.getFieldsAnnotatedWith(Version.class);
         if (!fields.isEmpty()) {
-            final MappedField versionMF = fields.get(0);
-            if (queryObject.get(versionMF.getNameToStore()) == null) {
-                if (isReplace) {
-                    Number n = (Number) update.get(versionMF.getNameToStore());
-                    update.put(versionMF.getNameToStore(), n != null ? n.longValue() + 1 : 1);
+            String name = fields.get(0).getNameToStore();
+            if (queryObject.get(name) == null) {
+                if (!update.containsField("$inc")) {
+                    update.put("$inc", new BasicDBObject(name, 1));
                 } else {
-                    if (!update.containsField("$inc")) {
-                        update.put("$inc", new BasicDBObject(versionMF.getNameToStore(), 1));
-                    } else {
-                        ((Map<String, Object>) (update.get("$inc"))).put(versionMF.getNameToStore(), 1);
-                    }
+                    ((Map<String, Object>) (update.get("$inc"))).put(name, 1);
                 }
             }
         }
