@@ -31,7 +31,6 @@ public class IndexExample {
     @Id
     private ObjectId id;
     private String field;
-    @Property
     private String field2;
     @Property("f3")
     private String field3;
